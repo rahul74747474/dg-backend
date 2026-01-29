@@ -10,7 +10,7 @@ console.log("🔥 app.js LOADED");
 // Middlewares
 app.use(
   cors({
-    origin: "http://localhost:8080",
+    origin: "https://dg-frontend-two.vercel.app/",
     credentials: true,
   })
 );
@@ -38,3 +38,4 @@ app.use((req, res) => {
 });
 
 export default app;
+
