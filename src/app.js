@@ -10,7 +10,7 @@ console.log("🔥 app.js LOADED");
 // Middlewares
 app.use(
   cors({
-    origin: "https://dgweb01.vercel.app",
+    origin: "https://www.desiiglobal.com",
     credentials: true,
   })
 );
@@ -38,6 +38,7 @@ app.use((req, res) => {
 });
 
 export default app;
+
 
 
 
