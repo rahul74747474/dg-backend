@@ -2,16 +2,19 @@ import mongoose from "mongoose";
 
 const orderSchema = new mongoose.Schema(
   {
+    /* ---------- USER ---------- */
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      index: true,
     },
 
     orderNumber: {
       type: String,
       required: true,
       unique: true,
+      index: true,
     },
 
     /* ---------- ORDER ITEMS ---------- */
@@ -23,22 +26,38 @@ const orderSchema = new mongoose.Schema(
           required: true,
         },
 
-        name: String,
-        image: String,
+        name: {
+          type: String,
+          required: true,
+        },
 
-        price: Number,      // snapshot price
-        quantity: Number,
+        image: {
+          type: String,
+        },
 
-        total: Number,
+        price: {
+          type: Number,
+          required: true,
+        },
+
+        quantity: {
+          type: Number,
+          required: true,
+        },
+
+        total: {
+          type: Number,
+          required: true,
+        },
       },
     ],
 
     /* ---------- PRICING ---------- */
     pricing: {
-      subTotal: Number,
-      shipping: Number,
-      tax: Number,
-      grandTotal: Number,
+      subTotal: { type: Number, required: true },
+      shipping: { type: Number, required: true },
+      tax: { type: Number, required: true },
+      grandTotal: { type: Number, required: true },
     },
 
     /* ---------- DELIVERY ---------- */
@@ -64,9 +83,14 @@ const orderSchema = new mongoose.Schema(
         type: String,
         enum: ["PENDING", "SUCCESS", "FAILED"],
         default: "PENDING",
+        index: true,
       },
 
-      transactionId: String,
+      transactionId: {
+        type: String,
+        unique: true,
+        sparse: true, // 🔥 allows null for COD but enforces uniqueness for online
+      },
     },
 
     /* ---------- ORDER STATUS ---------- */
@@ -82,10 +106,27 @@ const orderSchema = new mongoose.Schema(
         "RETURNED",
       ],
       default: "PLACED",
+      index: true,
     },
+
+    /* ---------- STATUS TRACKING ---------- */
+    statusHistory: [
+      {
+        status: String,
+        date: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
   { timestamps: true }
 );
 
-const OrderModel = mongoose.model("order", orderSchema);
+/* ---------- INDEXES ---------- */
+orderSchema.index({ userId: 1, createdAt: -1 });
+orderSchema.index({ orderStatus: 1 });
+
+const OrderModel = mongoose.model("Order", orderSchema);
+
 export default OrderModel;

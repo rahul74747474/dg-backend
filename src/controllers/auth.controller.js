@@ -27,6 +27,12 @@ export const registerUser = async (req, res) => {
       return res.status(400).json({ message: "All fields are required" });
     }
 
+    if (password.length < 6) {
+  return res.status(400).json({
+    message: "Password must be at least 6 characters",
+  });
+}
+
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(409).json({ message: "Email already registered" });
@@ -87,14 +93,23 @@ if (req.file) {
 };
 
 /* ================= VERIFY EMAIL ================= */
-export const verifyEmail = async (req, res) => {
+import asyncHandler from "../utils/asyncHandler.js";
+
+export const verifyEmail = asyncHandler(async (req, res) => {
   const { email, otp } = req.body;
 
   const user = await User.findOne({ email });
-  if (!user) return res.status(404).json({ message: "User not found" });
+
+  if (!user) {
+    const error = new Error("User not found");
+    error.statusCode = 404;
+    throw error;
+  }
 
   if (user.emailOTP !== otp || user.emailOTPExpiry < Date.now()) {
-    return res.status(400).json({ message: "Invalid or expired OTP" });
+    const error = new Error("Invalid or expired OTP");
+    error.statusCode = 400;
+    throw error;
   }
 
   user.isEmailVerified = true;
@@ -103,49 +118,74 @@ export const verifyEmail = async (req, res) => {
   await user.save();
 
   res.json({ success: true, message: "Email verified successfully" });
-};
+});
 
 /* ================= LOGIN ================= */
 export const loginUser = async (req, res) => {
-  const { email, password } = req.body;
+  try {
+    const { email, password } = req.body;
 
-  const user = await User.findOne({ email }).select("+password");
-  if (!user) return res.status(400).json({ message: "Invalid credentials" });
+    const user = await User.findOne({ email }).select("+password");
 
-  if (!user.isEmailVerified)
-    return res.status(403).json({ message: "Email not verified" });
+    if (!user) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
 
-  const isMatch = await bcrypt.compare(password, user.password);
-  if (!isMatch)
-    return res.status(400).json({ message: "Invalid credentials" });
+    if (!user.isEmailVerified) {
+      return res.status(403).json({ message: "Email not verified" });
+    }
 
-  const accessToken = generateAccessToken(user._id);
+    const isMatch = await bcrypt.compare(password, user.password);
 
-  user.lastLogin = new Date();
-  await user.save();
+    if (!isMatch) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
 
-  res.status(200).json({
-    success: true,
-    token: accessToken, // 🔥 IMPORTANT
-    user: {
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      avatar: user.avatar,
-      isEmailVerified: user.isEmailVerified,
-    },
-  });
+    // ✅ GENERATE TOKENS
+    const accessToken = generateAccessToken(user._id);
+    const refreshToken = generateRefreshToken(user._id);
+
+    // ✅ SAVE refresh token in DB
+    user.refreshToken = refreshToken;
+    user.lastLogin = new Date();
+    await user.save();
+
+    // ✅ SET COOKIE
+    res.cookie("refreshToken", refreshToken, {
+  httpOnly: true,
+  secure: false,           // 👈 dev me false
+  sameSite: "lax",         // 👈 dev ke liye best
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+});
+    return res.status(200).json({
+      success: true,
+      token: accessToken,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar,
+      },
+    });
+
+  } catch (error) {
+    console.error("LOGIN ERROR:", error);
+    res.status(500).json({ message: "Login failed" });
+  }
 };
 
-/* ================= REFRESH TOKEN ================= */
 export const refreshAccessToken = async (req, res) => {
   try {
     const token = req.cookies.refreshToken;
-    if (!token) return res.status(401).json({ message: "Unauthorized" });
+
+    if (!token) {
+      return res.status(401).json({ message: "No refresh token" });
+    }
 
     const decoded = jwt.verify(token, process.env.REFRESH_TOKEN_SECRET);
-    const user = await User.findById(decoded.userId);
+
+    const user = await User.findById(decoded.userId).select("+refreshToken");
 
     if (!user || user.refreshToken !== token) {
       return res.status(403).json({ message: "Invalid refresh token" });
@@ -153,17 +193,17 @@ export const refreshAccessToken = async (req, res) => {
 
     const newAccessToken = generateAccessToken(user._id);
 
-    res.cookie("accessToken", newAccessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 15 * 60 * 1000,
-    }).json({ success: true });
-  } catch {
-    res.status(403).json({ message: "Token expired or invalid" });
+    res.status(200).json({
+      success: true,
+      token: newAccessToken,
+    });
+
+  } catch (error) {
+    res.status(403).json({
+      message: "Token expired or invalid",
+    });
   }
 };
-
 /* ================= LOGOUT ================= */
 export const logoutUser = async (req, res) => {
   await User.findByIdAndUpdate(req.user._id, { refreshToken: null });
@@ -175,7 +215,7 @@ export const logoutUser = async (req, res) => {
 };
 
 /* ================= FORGOT PASSWORD ================= */
-export const forgotPassword = async (req, res) => {
+export const forgotPassword = asyncHandler( async (req, res) => {
   const { email } = req.body;
 
   const user = await User.findOne({ email });
@@ -193,10 +233,10 @@ export const forgotPassword = async (req, res) => {
   });
 
   res.json({ success: true, message: "OTP sent to email" });
-};
+});
 
 /* ================= RESET PASSWORD ================= */
-export const resetPassword = async (req, res) => {
+export const resetPassword = asyncHandler(async (req, res) => {
   const { email, otp, newPassword } = req.body;
 
   const user = await User.findOne({ email });
@@ -216,16 +256,16 @@ export const resetPassword = async (req, res) => {
   await user.save();
 
   res.json({ success: true, message: "Password reset successful" });
-};
+});
 
 /* ================= ME ================= */
-export const getMyProfile = async (req, res) => {
+export const getMyProfile = asyncHandler(async (req, res) => {
   const user = await User.findById(req.user._id)
     .select("-password -refreshToken")
     .populate("address_details");
 
   res.json({ success: true, user });
-};
+});
 
 /* ================= UPDATE PROFILE ================= */
 export const updateUserProfile = async (req, res) => {
@@ -245,7 +285,7 @@ export const updateUserProfile = async (req, res) => {
 };
 
 /* ================= CHANGE PASSWORD ================= */
-export const changePassword = async (req, res) => {
+export const changePassword = asyncHandler(async (req, res) => {
   const { oldPassword, newPassword } = req.body;
 
   if (!oldPassword || !newPassword)
@@ -265,7 +305,7 @@ export const changePassword = async (req, res) => {
   await user.save();
 
   res.json({ success: true, message: "Password changed successfully" });
-};
+});
 
 /* ================= EMAIL CHANGE ================= */
 export const requestEmailChange = async (req, res) => {

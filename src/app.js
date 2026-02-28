@@ -2,9 +2,11 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import routes from "./routes.js";
-
 const app = express();
 console.log("🔥 app.js LOADED");
+
+import errorHandler from "./middlewares/errorHandler.js";
+
 
 
 // Middlewares
@@ -37,6 +39,7 @@ app.use((req, res) => {
   });
 });
 
+app.use(errorHandler);
 export default app;
 
 

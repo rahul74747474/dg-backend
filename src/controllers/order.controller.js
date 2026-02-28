@@ -1,24 +1,32 @@
 import crypto from "crypto";
+import mongoose from "mongoose";
 import Order from "../models/Orderschema.model.js";
 import CartProduct from "../models/Cartproduct.model.js";
 import Product from "../models/Product.model.js";
 
 /* ================= CREATE ORDER ================= */
 export const createOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const userId = req.user._id;
     const { delivery_address, paymentMethod = "COD" } = req.body;
 
     if (!delivery_address) {
+      await session.abortTransaction();
       return res.status(400).json({
         message: "Delivery address is required",
       });
     }
 
     // 🔹 Fetch cart items
-    const cartItems = await CartProduct.find({ userId }).populate("productId");
+    const cartItems = await CartProduct.find({ userId })
+      .populate("productId")
+      .session(session);
 
     if (!cartItems || cartItems.length === 0) {
+      await session.abortTransaction();
       return res.status(400).json({
         message: "Cart is empty",
       });
@@ -27,20 +35,16 @@ export const createOrder = async (req, res) => {
     let subTotal = 0;
     const orderItems = [];
 
-    // 🔹 Validate products & calculate total
+    // 🔹 Validate + calculate
     for (const item of cartItems) {
       const product = item.productId;
 
       if (!product || product.status !== "ACTIVE") {
-        return res.status(400).json({
-          message: "One or more products are unavailable",
-        });
+        throw new Error("One or more products are unavailable");
       }
 
       if (product.countInStock < item.quantity) {
-        return res.status(400).json({
-          message: `${product.name} is out of stock`,
-        });
+        throw new Error(`${product.name} is out of stock`);
       }
 
       const itemTotal = product.price * item.quantity;
@@ -49,61 +53,78 @@ export const createOrder = async (req, res) => {
       orderItems.push({
         productId: product._id,
         name: product.name,
-        image: product.images?.[0],
+        image: product.images?.[0]?.url || "",
         price: product.price,
         quantity: item.quantity,
         total: itemTotal,
       });
     }
 
-    // 🔹 Pricing calculation
+    // 🔹 Pricing
     const shipping = subTotal > 999 ? 0 : 49;
     const tax = Math.round(subTotal * 0.05);
     const grandTotal = subTotal + shipping + tax;
 
     // 🔹 Create order
-    const order = await Order.create({
-      userId,
-      orderNumber: `DG-${crypto.randomUUID()}`,
-      items: orderItems,
+    const order = await Order.create(
+      [
+        {
+          userId,
+          orderNumber: `DG-${crypto.randomUUID()}`,
+          items: orderItems,
+          pricing: {
+            subTotal,
+            shipping,
+            tax,
+            grandTotal,
+          },
+          delivery_address,
+          payment: {
+            method: paymentMethod,
+            status: "PENDING",
+          },
+          orderStatus: "PLACED",
+        },
+      ],
+      { session }
+    );
 
-      pricing: {
-        subTotal,
-        shipping,
-        tax,
-        grandTotal,
-      },
-
-      // 🔥 Snapshot, not reference
-      delivery_address,
-
-      payment: {
-        method: paymentMethod,
-        status: "PENDING",
-      },
-
-      orderStatus: "PLACED",
-    });
-
-    // 🔻 Reduce stock
+    // 🔻 Reduce stock (atomic)
     for (const item of cartItems) {
-      await Product.findByIdAndUpdate(item.productId._id, {
-        $inc: { countInStock: -item.quantity },
-      });
+      const updated = await Product.findOneAndUpdate(
+        {
+          _id: item.productId._id,
+          countInStock: { $gte: item.quantity },
+        },
+        { $inc: { countInStock: -item.quantity } },
+        { session }
+      );
+
+      if (!updated) {
+        throw new Error("Stock changed, try again");
+      }
     }
 
     // 🔹 Clear cart
-    await CartProduct.deleteMany({ userId });
+    await CartProduct.deleteMany({ userId }).session(session);
+
+    await session.commitTransaction();
+    session.endSession();
 
     res.status(201).json({
       success: true,
       message: "Order placed successfully",
-      order,
+      order: order[0],
     });
+
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+
     console.error("CREATE ORDER ERROR:", error);
+
     res.status(500).json({
-      message: "Failed to place order",
+      message: error.message || "Failed to place order",
     });
   }
 };
@@ -221,4 +242,4 @@ export const updateOrderStatus = async (req, res) => {
   }
 };
 
-/* ================= ADMIN: GET ALL ORDERS ================= */ export const getAllOrders = async (req, res) => { try { const orders = await OrderModel.find() .populate("userId", "name email") .populate("delivery_address") .sort({ createdAt: -1 }); res.status(200).json({ success: true, orders, }); } catch (error) { console.error("GET ALL ORDERS ERROR:", error); res.status(500).json({ message: "Failed to fetch orders", }); } };
+/* ================= ADMIN: GET ALL ORDERS ================= */ export const getAllOrders = async (req, res) => { try { const orders = await Order.find() .populate("userId", "name email") .populate("delivery_address") .sort({ createdAt: -1 }); res.status(200).json({ success: true, orders, }); } catch (error) { console.error("GET ALL ORDERS ERROR:", error); res.status(500).json({ message: "Failed to fetch orders", }); } };

@@ -8,6 +8,8 @@ import myListRoutes from "./routes/mylist.route.js";
 import addressRoutes from "./routes/address.route.js";
 import orderRoutes from "./routes/order.route.js";
 import reviewRoutes from "./routes/review.route.js";
+import paymentRouter from "./routes/payment.route.js";
+
 
 const router = express.Router();
 
@@ -43,5 +45,7 @@ router.use("/orders", orderRoutes);
 // Reviews
 router.use("/reviews", reviewRoutes);
 
+//payment
+router.use("/api/payment", paymentRouter);
 export default router;
 
