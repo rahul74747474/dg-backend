@@ -10,9 +10,20 @@ import errorHandler from "./middlewares/errorHandler.js";
 
 
 // Middlewares
+const allowedOrigins = [
+  "http://localhost:8080",
+  "https://www.desiiglobal.com",
+];
+
 app.use(
   cors({
-    origin: "https://www.desiiglobal.com",
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   })
 );
@@ -41,6 +52,7 @@ app.use((req, res) => {
 
 app.use(errorHandler);
 export default app;
+
 
 
 
