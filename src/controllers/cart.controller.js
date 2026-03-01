@@ -71,43 +71,54 @@ export const getCartItemController = async (req, res) => {
 };
 
 /* ================= UPDATE CART ITEM QTY ================= */
-export const updateCartItemQtyController = async (req, res) => {
+export const updateCartItemController = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { productId, quantity } = req.body;
+    const { productId, action } = req.body;
 
-    if (!productId || typeof quantity !== "number") {
+    if (!productId || !action) {
       return res.status(400).json({
-        message: "productId and quantity are required",
+        message: "productId and action are required",
       });
     }
 
-    if (quantity < 1) {
-      return res.status(400).json({
-        message: "Quantity must be at least 1",
-      });
+    let updateQuery = {};
+
+    if (action === "increase") {
+      updateQuery = { $inc: { quantity: 1 } };
+    } else if (action === "decrease") {
+      updateQuery = { $inc: { quantity: -1 } };
+    } else {
+      return res.status(400).json({ message: "Invalid action" });
     }
 
-    const cartItem = await CartProductModel.findOne({
-      userId,
-      productId,
-    });
+    const cartItem = await CartProductModel.findOneAndUpdate(
+      { userId, productId },
+      updateQuery,
+      { new: true }
+    );
 
     if (!cartItem) {
       return res.status(404).json({ message: "Cart item not found" });
     }
 
-    cartItem.quantity = quantity;
-    await cartItem.save();
+    // Auto delete if qty <= 0 🔥
+    if (cartItem.quantity <= 0) {
+      await cartItem.deleteOne();
+      return res.status(200).json({
+        success: true,
+        message: "Item removed",
+      });
+    }
 
     res.status(200).json({
       success: true,
-      message: "Quantity updated",
+      message: "Cart updated",
       cartItem,
     });
   } catch (error) {
     console.error("UPDATE CART ERROR:", error);
-    res.status(500).json({ message: "Failed to update quantity" });
+    res.status(500).json({ message: "Failed to update cart" });
   }
 };
 
