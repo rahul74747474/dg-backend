@@ -71,7 +71,7 @@ export const getCartItemController = async (req, res) => {
 };
 
 /* ================= UPDATE CART ITEM QTY ================= */
-export const updateCartItemController = async (req, res) => {
+export const updateCartItemQtyController = async (req, res) => {
   try {
     const userId = req.user._id;
     const { productId, action } = req.body;
