@@ -29,7 +29,7 @@ cartRouter.get("/", protect, getCartItemController);
  * @desc    Update cart item quantity
  * @access  Private
  */
-cartRouter.put("/update", protect, updateCartItemQtyController);
+cartRouter.patch("/update", protect, updateCartItemQtyController);
 
 /**
  * @route   DELETE /api/cart/remove
