@@ -170,5 +170,27 @@ export const deleteMultipleProducts = async (req, res) => {
   } catch (error) { console.error("BULK DELETE ERROR:", error); res.status(500).json({ message: "Failed to delete products", }); }
 };
 
+export const searchProducts = async (req, res) => {
+  try {
+    const { q } = req.query;
+
+    if (!q) return res.json({ products: [] });
+
+    const products = await Product.find({
+      $or: [
+        { name: { $regex: q, $options: "i" } },
+        { catName: { $regex: q, $options: "i" } },
+      ],
+      status: "ACTIVE",
+    })
+      .select("name slug images price")
+      .limit(8);
+
+    res.json({ products });
+  } catch (err) {
+    res.status(500).json({ message: "Search failed" });
+  }
+};
+
 /* ================= PRODUCTS COUNT ================= */
  export const getProductsCount = async (req, res) => { const count = await Product.countDocuments(); res.json({ count }); };

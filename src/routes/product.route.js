@@ -9,7 +9,8 @@ import {
   getProductsCount,
   getAllFeaturedProducts,
   removeImageFromCloudinary,
-  deleteMultipleProducts
+  deleteMultipleProducts,
+  searchProducts
 } from "../controllers/product.controller.js";
 
 
@@ -32,6 +33,8 @@ router.get("/featured/all", getAllFeaturedProducts);
 
 // ✅ get single product by SLUG (IMPORTANT)
 router.get("/slug/:slug", getProduct);
+
+router.get("/search", searchProducts);
 
 /* ================= ADMIN ROUTES ================= */
 
