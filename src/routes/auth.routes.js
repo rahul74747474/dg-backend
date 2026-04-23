@@ -14,6 +14,7 @@ import {
   requestEmailChange,
   verifyEmailChange,
   logoutUser,
+  resendOTP,
 } from "../controllers/auth.controller.js";
 import dotenv from "dotenv";
 dotenv.config(); //
@@ -63,7 +64,7 @@ router.put(
   upload.single("avatar"),    // 👈 use single (not array)
   userAvatarController
 );
-
+router.post("/resend-otp", resendOTP);
 router.delete("/avatar", protect, removeAvatarController);
 
 export default router;

@@ -425,3 +425,38 @@ export const removeAvatarController = async (req, res) => {
     });
   }
 };
+
+export const resendOTP = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+
+  const user = await User.findOne({ email });
+
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  if (user.isEmailVerified) {
+    return res.status(400).json({ message: "Email already verified" });
+  }
+
+  // 🔥 generate new OTP
+  const otp = generateOTP();
+
+  user.emailOTP = otp;
+  user.emailOTPExpiry = Date.now() + 10 * 60 * 1000;
+  await user.save();
+
+  // 🔥 send email again
+  await sendEmail({
+    to: email,
+    subject: "Resend OTP - Verify your email",
+    html: `
+      <h3>Email Verification</h3>
+      <p>Your new OTP is:</p>
+      <h2>${otp}</h2>
+      <p>This OTP is valid for 10 minutes.</p>
+    `,
+  });
+
+  res.json({ success: true, message: "OTP resent successfully" });
+});
