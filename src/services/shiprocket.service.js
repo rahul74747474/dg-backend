@@ -4,57 +4,208 @@ import mongoose from "mongoose";
 
 const SR_BASE_URL = "https://apiv2.shiprocket.in/v1/external";
 
-export const processShiprocketFlow = async (order) => {
-  try {
-    /* ---------------- TOKEN ---------------- */
-    const token = await getShiprocketToken();
+/**
+ * Creates an authenticated Axios client for Shiprocket API requests.
+ */
+const getShiprocketClient = async () => {
+  const token = await getShiprocketToken();
+  return axios.create({
+    baseURL: SR_BASE_URL,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    timeout: 12000,
+  });
+};
 
-    const client = axios.create({
-      baseURL: SR_BASE_URL,
-      headers: { Authorization: `Bearer ${token}` },
-      timeout: 15000,
+/**
+ * Calculates live courier rates and serviceability from Shiprocket based on actual cart weight,
+ * dimensions, delivery pincode, and payment method.
+ *
+ * @param {Object} params
+ * @param {string} params.deliveryPincode
+ * @param {boolean} [params.isCod=false]
+ * @param {number} [params.weight=0.5] // in kg (minimum 0.5kg for courier rates)
+ * @param {Object} [params.dimensions] // { length, breadth, height } in cm
+ * @param {string} [params.courierSelectionStrategy='cheapest']
+ * @returns {Promise<{ serviceable: boolean, actualRate?: number, courierName?: string, courierId?: number, etd?: string, error?: string }>}
+ */
+export const getShippingRateForCart = async ({
+  deliveryPincode,
+  isCod = false,
+  weight = 0.5,
+  dimensions = { length: 10, breadth: 10, height: 5 },
+  courierSelectionStrategy = "cheapest",
+  declaredValue = 500,
+}) => {
+  const pickupPincode = process.env.SHIPROCKET_PICKUP_PINCODE || "226010";
+  const normalizedWeight = Math.max(Number(weight) || 0.5, 0.5);
+
+  if (!deliveryPincode || String(deliveryPincode).trim().length !== 6) {
+    return {
+      serviceable: false,
+      error: "Invalid delivery pincode",
+    };
+  }
+
+  try {
+    const client = await getShiprocketClient();
+
+    const response = await client.get("/courier/serviceability/", {
+      params: {
+        pickup_postcode: pickupPincode,
+        delivery_postcode: deliveryPincode,
+        cod: isCod ? 1 : 0,
+        weight: normalizedWeight,
+        length: Math.max(dimensions.length || 10, 5),
+        breadth: Math.max(dimensions.breadth || 10, 5),
+        height: Math.max(dimensions.height || 5, 2),
+        declared_value: Math.max(Number(declaredValue) || 100, 100),
+      },
     });
 
-    /* ---------------- FETCH USER ---------------- */
-   const user = await mongoose.connection
-  .collection("users")
-  .findOne(
-    { _id: new mongoose.Types.ObjectId(order.userId) },
-    { projection: { name: 1, email: 1 } }
-  );
+    const data = response.data?.data;
+    const couriers = data?.available_courier_companies || [];
 
-    /* ---------------- VALIDATION ---------------- */
-    const addr = order.delivery_address;
-
-    if (!addr) {
-      throw new Error("❌ Delivery address missing in order");
+    if (!couriers.length) {
+      return {
+        serviceable: false,
+        error: `Delivery is not available for pincode ${deliveryPincode}`,
+      };
     }
 
-    const requiredFields = [
-      "mobile",
-      "address_line",
-      "city",
-      "state",
-      "pincode",
-    ];
+    // Courier selection strategy
+    let selectedCourier = null;
+    if (courierSelectionStrategy === "recommended" && data?.recommended_courier_company_id) {
+      selectedCourier = couriers.find(
+        (c) => c.courier_company_id === data.recommended_courier_company_id
+      );
+    }
 
+    if (!selectedCourier) {
+      // Default to cheapest eligible courier
+      selectedCourier = [...couriers].sort((a, b) => Number(a.rate) - Number(b.rate))[0];
+    }
+
+    if (!selectedCourier || isNaN(Number(selectedCourier.rate))) {
+      return {
+        serviceable: false,
+        error: `No courier rate available for pincode ${deliveryPincode}`,
+      };
+    }
+
+    const actualRate = Math.round(Number(selectedCourier.rate));
+
+    return {
+      serviceable: true,
+      actualRate,
+      courierName: selectedCourier.courier_name || "Standard Courier",
+      courierId: selectedCourier.courier_company_id,
+      etd: selectedCourier.estimated_delivery_days
+        ? `${selectedCourier.estimated_delivery_days} days`
+        : "3-5 days",
+    };
+  } catch (error) {
+    const isDev = process.env.NODE_ENV !== "production";
+    const allowFallback = process.env.SHIPROCKET_ALLOW_FALLBACK === "true" || isDev;
+
+    console.error(
+      "🚨 Shiprocket Serviceability API Error:",
+      error.response?.data?.message || error.message
+    );
+
+    // In production without explicit fallback flag, fail safely with controlled error
+    if (!allowFallback) {
+      return {
+        serviceable: false,
+        error: "Unable to retrieve live shipping rates. Please verify your delivery pincode or try again later.",
+      };
+    }
+
+    // In development / test fallback mode
+    console.warn(
+      `⚠️ [DEV FALLBACK] Shiprocket unavailable. Using development fallback rate for pincode ${deliveryPincode}.`
+    );
+
+    return {
+      serviceable: true,
+      actualRate: 65,
+      courierName: "Standard Surface (Dev Fallback)",
+      courierId: 1,
+      etd: "3-5 days",
+      isDevFallback: true,
+    };
+  }
+};
+
+/**
+ * Public serviceability check for product detail page and quick pincode validation.
+ */
+export const checkPincodeServiceability = async ({
+  deliveryPincode,
+  cod = 1,
+  weight = 0.5,
+}) => {
+  const result = await getShippingRateForCart({
+    deliveryPincode,
+    isCod: Boolean(cod),
+    weight,
+  });
+
+  return {
+    available: result.serviceable,
+    message: result.serviceable ? "Delivery available" : result.error || "Delivery not available",
+    cheapestCourier: result.serviceable
+      ? {
+          name: result.courierName,
+          rate: result.actualRate,
+          etd: result.etd,
+          cod,
+        }
+      : null,
+  };
+};
+
+/**
+ * Creates an adhoc order, checks courier serviceability, and assigns AWB in Shiprocket.
+ * Executed after an order is committed and confirmed.
+ *
+ * @param {Object} order - Mongoose Order document
+ */
+export const processShiprocketFlow = async (order) => {
+  try {
+    const client = await getShiprocketClient();
+    const pickupPincode = process.env.SHIPROCKET_PICKUP_PINCODE || "226010";
+
+    const user = await mongoose.connection
+      .collection("users")
+      .findOne(
+        { _id: new mongoose.Types.ObjectId(order.userId) },
+        { projection: { name: 1, email: 1 } }
+      );
+
+    const addr = order.delivery_address;
+    if (!addr) {
+      throw new Error("Delivery address missing in order");
+    }
+
+    const requiredFields = ["mobile", "address_line", "city", "state", "pincode"];
     const capitalize = (str) =>
-      str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
+      str ? str.charAt(0).toUpperCase() + str.slice(1).toLowerCase() : "";
 
-    for (let field of requiredFields) {
+    for (const field of requiredFields) {
       if (!addr[field]) {
-        throw new Error(`❌ Missing address field: ${field}`);
+        throw new Error(`Missing address field: ${field}`);
       }
     }
 
-    /* ---------------- PAYLOAD ---------------- */
     const orderPayload = {
       order_id: order.orderNumber,
       order_date: new Date().toISOString().split("T")[0],
-      pickup_location: "warehouse",
+      pickup_location: process.env.SHIPROCKET_PICKUP_LOCATION || "Primary",
 
-      // 🔥 USER + ADDRESS BASED (NO HARDCODE)
-      billing_customer_name: user?.name || addr.name,
+      billing_customer_name: user?.name || addr.name || "Customer",
       billing_last_name: "",
       billing_address: addr.address_line,
       billing_city: addr.city,
@@ -62,78 +213,70 @@ export const processShiprocketFlow = async (order) => {
       billing_state: capitalize(addr.state),
       billing_country: addr.country || "India",
       billing_phone: addr.mobile,
-      billing_email: user?.email || "test@example.com",
+      billing_email: user?.email || "customer@example.com",
 
-      shipping_customer_name: user?.name || addr.name,
+      shipping_customer_name: user?.name || addr.name || "Customer",
       shipping_address: addr.address_line,
       shipping_city: addr.city,
       shipping_pincode: addr.pincode,
       shipping_state: capitalize(addr.state),
       shipping_country: addr.country || "India",
       shipping_phone: addr.mobile,
-      shipping_email: user?.email || "test@example.com",
+      shipping_email: user?.email || "customer@example.com",
 
       shipping_is_billing: true,
 
       order_items: order.items.map((item) => ({
-  name: item.name,
-  sku: item.sku,
-  units: item.quantity,
-  selling_price: item.price,
-  hsn: item.hsnCode || "20081910", // 🔥 ADD THIS LINE
-})),
+        name: item.name,
+        sku: item.sku || `SKU-${item.productId}`,
+        units: item.quantity,
+        selling_price: item.price,
+        hsn: item.hsnCode || "20081910",
+      })),
 
-      payment_method:
-        order.payment.method === "COD" ? "COD" : "Prepaid",
+      payment_method: order.payment?.method === "COD" ? "COD" : "Prepaid",
+      sub_total: order.pricing?.subTotal || 0,
 
-      sub_total: order.pricing.subTotal,
-
-      // 🔥 DYNAMIC DIMENSIONS
-      length: order.shipmentDetails?.length || 10,
-      breadth: order.shipmentDetails?.breadth || 10,
-      height: order.shipmentDetails?.height || 10,
-      weight: order.shipmentDetails?.weight || 0.5,
+      length: Math.max(order.shipmentDetails?.length || 10, 5),
+      breadth: Math.max(order.shipmentDetails?.breadth || 10, 5),
+      height: Math.max(order.shipmentDetails?.height || 5, 2),
+      weight: Math.max(order.shipmentDetails?.weight || 0.5, 0.5),
     };
 
-    console.log("📦 Shiprocket Payload:", orderPayload);
+    console.log("📦 Shiprocket Create Order Payload:", orderPayload);
 
-    /* ---------------- STEP 1: CREATE ORDER ---------------- */
+    // Step 1: Create adhoc order
     const orderRes = await client.post("/orders/create/adhoc", orderPayload);
-
-    console.log("📦 Shiprocket Order Response:", orderRes.data);
-
     const shipmentId = orderRes.data?.shipment_id;
 
     if (!shipmentId) {
-      throw new Error("❌ Shipment ID not received from Shiprocket");
+      throw new Error("Shipment ID not received from Shiprocket");
     }
 
-    /* ---------------- STEP 2: GET BEST COURIER ---------------- */
+    // Step 2: Get Best Courier
     const weight = Math.max(order.shipmentDetails?.weight || 0.5, 0.5);
-
-    const serviceRes = await client.get(
-      `/courier/serviceability/?pickup_postcode=226010&delivery_postcode=${addr.pincode}&cod=${
-        order.payment.method === "COD" ? 1 : 0
-      }&weight=${weight}`
-    );
+    const serviceRes = await client.get("/courier/serviceability/", {
+      params: {
+        pickup_postcode: pickupPincode,
+        delivery_postcode: addr.pincode,
+        cod: order.payment?.method === "COD" ? 1 : 0,
+        weight,
+      },
+    });
 
     const couriers = serviceRes.data?.data?.available_courier_companies;
-
-    let courierId =
-      serviceRes.data?.data?.recommended_courier_company_id;
+    let courierId = serviceRes.data?.data?.recommended_courier_company_id;
 
     if (!courierId && couriers?.length) {
-      courierId = couriers.sort((a, b) => a.rate - b.rate)[0].courier_company_id;
+      courierId = couriers.sort((a, b) => Number(a.rate) - Number(b.rate))[0].courier_company_id;
     }
 
     if (!courierId) {
-      throw new Error("❌ No courier available for this route");
+      throw new Error("No courier available for this route");
     }
 
-    console.log("🚚 Selected Courier ID:", courierId);
-
-    /* ---------------- STEP 3: ASSIGN AWB ---------------- */
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // Step 3: Assign AWB
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     let awbCode = null;
     let courierName = null;
@@ -144,95 +287,37 @@ export const processShiprocketFlow = async (order) => {
         courier_id: courierId,
       });
 
-      console.log("🚚 AWB RESPONSE:", awbRes.data);
-
       if (awbRes.data?.awb_assign_status === 1) {
         awbCode = awbRes.data.response.data.awb_code;
         courierName = awbRes.data.response.data.courier_name;
-      } else {
-        console.warn("⚠️ AWB not assigned yet");
       }
     } catch (awbError) {
       console.warn(
-        "⚠️ AWB assignment failed (wallet issue likely):",
+        "⚠️ AWB assignment delayed or failed (wallet balance likely):",
         awbError.response?.data || awbError.message
       );
     }
 
-    /* ---------------- SUCCESS ---------------- */
-    return {
-      shipmentId,
-      awbCode,       // can be null
-      courier: courierName, // can be null
-    };
-
-  } catch (error) {
-    console.error(
-      "🚨 Shiprocket Error:",
-      error.response?.data || error.message
-    );
-    throw error;
-  }
-};
-
-
-export const checkPincodeServiceability = async ({
-  deliveryPincode,
-  cod = 1,
-  weight = 0.5,
-}) => {
-  try {
-    const token = await getShiprocketToken();
-
-    const client = axios.create({
-      baseURL: SR_BASE_URL,
-      headers: { Authorization: `Bearer ${token}` },
-      timeout: 15000,
-    });
-
-    const response = await client.get(
-      `/courier/serviceability/`,
+    // Step 4: Persist shipping details on Order document
+    await mongoose.connection.collection("orders").updateOne(
+      { _id: new mongoose.Types.ObjectId(order._id) },
       {
-        params: {
-          pickup_postcode: "226010", // 🔥 your warehouse pincode
-          delivery_postcode: deliveryPincode,
-          cod,
-          weight,
+        $set: {
+          "shipping.shipmentId": shipmentId,
+          "shipping.awbCode": awbCode,
+          "shipping.courierName": courierName,
+          orderStatus: awbCode ? "CONFIRMED" : "PLACED",
         },
       }
     );
 
-    const data = response.data?.data;
-    const couriers = data?.available_courier_companies || [];
-
-    if (!couriers.length) {
-      return {
-        available: false,
-        message: "No courier available",
-      };
-    }
-
-    // ✅ Cheapest courier
-    const cheapest = [...couriers].sort((a, b) => a.rate - b.rate)[0];
-
     return {
-      available: true,
-      couriers,
-      recommendedCourierId: data?.recommended_courier_company_id,
-      cheapestCourier: {
-        name: cheapest.courier_name,
-        rate: cheapest.rate,
-        etd: cheapest.estimated_delivery_days,
-        cod: cheapest.cod,
-      },
+      shipmentId,
+      awbCode,
+      courier: courierName,
     };
-
   } catch (error) {
-    console.error(
-      "🚨 Serviceability Error:",
-      error.response?.data || error.message
-    );
-
-    throw new Error("Failed to check serviceability");
+    console.error("🚨 Shiprocket Execution Error:", error.response?.data || error.message);
+    throw error;
   }
 };

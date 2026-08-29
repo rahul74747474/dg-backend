@@ -66,9 +66,21 @@ const orderSchema = new mongoose.Schema(
     /* ---------- PRICING ---------- */
     pricing: {
       subTotal: { type: Number, required: true },
-      shipping: { type: Number, required: true },
+      discount: { type: Number, default: 0 },
+      taxableAmount: { type: Number },
+      shipping: { type: Number, required: true }, // Customer delivery charge
+      actualShippingCost: { type: Number, default: 0 }, // Carrier/Shiprocket actual rate
+      shippingAbsorbedByMerchant: { type: Number, default: 0 }, // Cost absorbed by store
       tax: { type: Number, required: true },
+      codCharge: { type: Number, default: 0 },
       grandTotal: { type: Number, required: true },
+      currency: { type: String, default: "INR" },
+      discountDetails: {
+        applied: { type: Boolean, default: false },
+        name: String,
+        code: String,
+        amount: { type: Number, default: 0 },
+      },
     },
 
     /* ---------- DELIVERY ---------- */

@@ -1,27 +1,33 @@
 import axios from "axios";
 
-const SHIPROCKET_EMAIL = process.env.SHIPROCKET_EMAIL;
-const SHIPROCKET_PASSWORD = process.env.SHIPROCKET_PASSWORD;
-
 let shiprocketToken = null;
 let tokenExpiry = null;
 
 export const getShiprocketToken = async () => {
-  if (shiprocketToken && tokenExpiry > Date.now()) {
+  if (shiprocketToken && tokenExpiry && tokenExpiry > Date.now()) {
     return shiprocketToken;
+  }
+
+  const email = process.env.SHIPROCKET_EMAIL;
+  const password = process.env.SHIPROCKET_PASSWORD;
+
+  if (!email || !password) {
+    throw new Error("Shiprocket credentials (SHIPROCKET_EMAIL, SHIPROCKET_PASSWORD) are not configured");
   }
 
   const res = await axios.post(
     "https://apiv2.shiprocket.in/v1/external/auth/login",
-    {
-      email: SHIPROCKET_EMAIL,
-      password: SHIPROCKET_PASSWORD,
-    }
+    { email, password },
+    { timeout: 10000 }
   );
 
-  shiprocketToken = res.data.token;
+  if (!res.data?.token) {
+    throw new Error("Failed to obtain authentication token from Shiprocket");
+  }
 
-  tokenExpiry = Date.now() + 9 * 24 * 60 * 60 * 1000; // 9 days
+  shiprocketToken = res.data.token;
+  // Cache for 9 days (Shiprocket tokens typically last 10 days)
+  tokenExpiry = Date.now() + 9 * 24 * 60 * 60 * 1000;
 
   return shiprocketToken;
-};
+};

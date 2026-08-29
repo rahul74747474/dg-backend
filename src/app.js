@@ -13,9 +13,29 @@ import errorHandler from "./middlewares/errorHandler.js";
 
 
 // Middlewares
+const allowedOrigins = [
+  "http://localhost:8080",
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:8080",
+  "http://127.0.0.1:5173",
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: true,
+    origin: (origin, callback) => {
+      // Allow server-to-server or non-browser requests
+      if (!origin) return callback(null, true);
+      if (
+        allowedOrigins.includes(origin) ||
+        origin.startsWith("http://localhost:") ||
+        origin.startsWith("http://127.0.0.1:")
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, origin);
+    },
     credentials: true,
   })
 );

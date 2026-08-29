@@ -9,9 +9,10 @@ import addressRoutes from "./routes/address.route.js";
 import orderRoutes from "./routes/order.route.js";
 import reviewRoutes from "./routes/review.route.js";
 import paymentRouter from "./routes/payment.route.js";
-import shippingRoutes from "./routes/shiprocket.route.js"
-import contactRoutes from "./routes/contact.route.js"
+import shippingRoutes from "./routes/shiprocket.route.js";
+import contactRoutes from "./routes/contact.route.js";
 import b2bRouter from "./routes/b2b.route.js";
+import pricingRoutes from "./routes/pricing.route.js";
 import { trackOrderController } from "./controllers/track.controller.js";
 
 
@@ -52,10 +53,12 @@ router.use("/reviews", reviewRoutes);
 //payment
 router.use("/payment", paymentRouter);
 
-router.use("/shipping", shippingRoutes);
+// Pricing Configuration
+router.use("/pricing", pricingRoutes);
 
+router.use("/shipping", shippingRoutes);
 router.use("/contact", contactRoutes);
 router.get("/track/:shipmentId", trackOrderController);
-router.use("/b2b", b2bRouter)
+router.use("/b2b", b2bRouter);
 export default router;
 

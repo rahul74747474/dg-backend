@@ -7,7 +7,11 @@ dotenv.config();
 /* ---------- DB CONNECT ---------- */
 const connectDB = async () => {
   try {
-    await mongoose.connect("mongodb+srv://adminn:ss7_Dhoni@main.3gkqcqt.mongodb.net/?appName=main");
+    const uri = process.env.MONGO_DB_URI || process.env.MONGODB_URI;
+    if (!uri) {
+      throw new Error("MongoDB URI environment variable (MONGO_DB_URI / MONGODB_URI) is missing");
+    }
+    await mongoose.connect(uri);
     console.log("✅ MongoDB Connected");
   } catch (error) {
     console.error("❌ DB Connection Failed", error);

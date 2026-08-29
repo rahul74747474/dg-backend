@@ -3,183 +3,175 @@ import mongoose from "mongoose";
 import Order from "../models/Orderschema.model.js";
 import CartProduct from "../models/Cartproduct.model.js";
 import Product from "../models/Product.model.js";
+import Address from "../models/Address.model.js";
+import { calculateOrderPricing } from "../services/pricing.service.js";
+import { processShiprocketFlow } from "../services/shiprocket.service.js";
 
-export const createOrder = async (req, res) => {
-const session = await mongoose.startSession();
-session.startTransaction();
+/**
+ * Preview checkout billing and real-time shipping quote without committing an order.
+ * POST /api/orders/preview
+ */
+export const previewOrderPricing = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { addressId, delivery_address, paymentMethod = "ONLINE", couponCode = "" } = req.body;
 
-try {
-const userId = req.user._id;
-const { delivery_address, paymentMethod } = req.body;
+    let targetAddress = delivery_address || null;
 
-if (!delivery_address) {
-  await session.abortTransaction();
-  return res.status(400).json({
-    message: "Delivery address is required",
-  });
-}
+    if (addressId) {
+      const dbAddress = await Address.findOne({ _id: addressId, userId });
+      if (dbAddress) {
+        targetAddress = {
+          name: dbAddress.name || "",
+          mobile: dbAddress.mobile || "",
+          address_line: dbAddress.address_line,
+          city: dbAddress.city,
+          state: dbAddress.state,
+          pincode: dbAddress.pincode,
+          country: dbAddress.country || "India",
+        };
+      }
+    }
 
-// 🔹 Fetch cart items
-const cartItems = await CartProduct.find({ userId })
-  .populate({
-    path: "productId",
-    select:
-      "name price sku weight dimensions hsnCode tax images status countInStock",
-  })
-  .session(session);
-
-if (!cartItems.length) {
-  await session.abortTransaction();
-  return res.status(400).json({
-    message: "Cart is empty",
-  });
-}
-
-let subTotal = 0;
-const orderItems = [];
-
-// 🔹 Build order items
-for (const item of cartItems) {
-  const product = item.productId;
-
-  if (
-    !product ||
-    product.status !== "ACTIVE" ||
-    product.countInStock < item.quantity
-  ) {
-    throw new Error(`${product?.name || "Product"} unavailable`);
-  }
-
-  if (!product.sku) {
-    throw new Error(`SKU missing for ${product.name}`);
-  }
-
-  const itemTotal = product.price * item.quantity;
-  subTotal += itemTotal;
-
-  orderItems.push({
-    productId: product._id,
-    name: product.name,
-    image: product.images?.[0] || "",
-    sku: product.sku,
-
-    price: product.price,
-    quantity: item.quantity,
-    total: itemTotal,
-
-    // 🔥 snapshot fields for shipping
-    weight: product.weight || 0.5,
-    length: product.dimensions?.length || 10,
-    breadth: product.dimensions?.breadth || 10,
-    height: product.dimensions?.height || 5,
-    hsnCode: product.hsnCode || "0000",
-    tax: product.tax || 0,
-  });
-}
-
-// 🔥 Calculate shipment AFTER loop
-const totalWeight = cartItems.reduce(
-  (acc, item) =>
-    acc + (item.productId.weight || 0.5) * item.quantity,
-  0
-);
-
-const maxLength = Math.max(
-  ...cartItems.map((i) => i.productId.dimensions?.length || 10)
-);
-
-const maxBreadth = Math.max(
-  ...cartItems.map((i) => i.productId.dimensions?.breadth || 10)
-);
-
-const totalHeight = cartItems.reduce(
-  (acc, i) =>
-    acc + (i.productId.dimensions?.height || 5) * i.quantity,
-  0
-);
-
-// 🔹 Pricing
-const shipping = subTotal > 999 ? 0 : 49;
-const tax = Math.round(subTotal * 0.05);
-const grandTotal = subTotal + shipping + tax;
-
-// 🔹 Create order
-const [order] = await Order.create(
-  [
-    {
+    const billing = await calculateOrderPricing({
       userId,
-      orderNumber: `DG-${crypto.randomUUID()}`,
+      address: targetAddress,
+      paymentMethod,
+      couponCode,
+    });
 
-      items: orderItems,
+    return res.status(200).json(billing);
+  } catch (error) {
+    console.error("ORDER PREVIEW ERROR:", error);
+    return res.status(error.message === "Cart is empty" ? 400 : 500).json({
+      success: false,
+      message: error.message || "Failed to calculate pricing preview",
+    });
+  }
+};
 
-      pricing: { subTotal, shipping, tax, grandTotal },
+/**
+ * Creates a Cash on Delivery (COD) Order using the Centralized Pricing Engine.
+ * POST /api/orders
+ */
+export const createOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-      delivery_address,
+  try {
+    const userId = req.user._id;
+    const { addressId, delivery_address, couponCode } = req.body;
 
-      shipmentDetails: {
-        weight: totalWeight,
-        length: maxLength,
-        breadth: maxBreadth,
-        height: totalHeight,
-      },
+    let targetAddress = delivery_address || null;
 
-      payment: {
-        method: paymentMethod,
-        status: paymentMethod === "COD" ? "SUCCESS" : "PENDING",
-      },
+    if (addressId) {
+      const dbAddress = await Address.findOne({ _id: addressId, userId }).session(session);
+      if (dbAddress) {
+        targetAddress = {
+          name: dbAddress.name || req.user.name || "",
+          mobile: dbAddress.mobile || "",
+          address_line: dbAddress.address_line,
+          city: dbAddress.city,
+          state: dbAddress.state,
+          pincode: dbAddress.pincode,
+          country: dbAddress.country || "India",
+        };
+      }
+    }
 
-      orderStatus: paymentMethod === "COD" ? "CONFIRMED" : "PLACED",
+    if (!targetAddress || !targetAddress.pincode) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: "A valid delivery address with pincode is required",
+      });
+    }
 
-      statusHistory: [
+    // 1. Authoritative Pricing & Shipping Revalidation
+    const billing = await calculateOrderPricing({
+      userId,
+      address: targetAddress,
+      paymentMethod: "COD",
+      couponCode,
+      session,
+    });
+
+    if (!billing.serviceable) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: billing.message || "Delivery is not available for this address pincode",
+      });
+    }
+
+    // 2. Create Order with Immutable Pricing Snapshot
+    const [order] = await Order.create(
+      [
         {
-          status:
-            paymentMethod === "COD" ? "CONFIRMED" : "PLACED",
+          userId,
+          orderNumber: `DG-${crypto.randomUUID()}`,
+          items: billing.items,
+          pricing: billing.pricing,
+          delivery_address: targetAddress,
+          shipmentDetails: billing.shipmentDetails,
+          payment: {
+            method: "COD",
+            status: "SUCCESS",
+          },
+          orderStatus: "CONFIRMED",
+          statusHistory: [
+            {
+              status: "CONFIRMED",
+              date: new Date(),
+            },
+          ],
         },
       ],
-    },
-  ],
-  { session }
-);
+      { session }
+    );
 
-// 🔻 Reduce stock
-for (const item of cartItems) {
-  const updated = await Product.findOneAndUpdate(
-    {
-      _id: item.productId._id,
-      countInStock: { $gte: item.quantity },
-    },
-    { $inc: { countInStock: -item.quantity } },
-    { session }
-  );
+    // 3. Atomically Reduce Stock
+    for (const item of billing.items) {
+      const updated = await Product.findOneAndUpdate(
+        {
+          _id: item.productId,
+          countInStock: { $gte: item.quantity },
+        },
+        { $inc: { countInStock: -item.quantity } },
+        { session }
+      );
 
-  if (!updated) throw new Error("Stock changed, try again");
-}
+      if (!updated) {
+        throw new Error(`Stock changed for "${item.name}". Please review your cart.`);
+      }
+    }
 
-// 🔹 Clear cart
-await CartProduct.deleteMany({ userId }).session(session);
+    // 4. Clear Cart
+    await CartProduct.deleteMany({ userId }).session(session);
 
-await session.commitTransaction();
-session.endSession();
+    await session.commitTransaction();
+    session.endSession();
 
-res.status(201).json({
-  success: true,
-  message: "Order placed successfully",
-  order,
-});
+    // 5. Trigger Shiprocket Fulfillment (Non-blocking background)
+    processShiprocketFlow(order).catch((err) => {
+      console.warn("⚠️ Shiprocket background processing warning:", err.message);
+    });
 
+    return res.status(201).json({
+      success: true,
+      message: "Order placed successfully with Cash on Delivery 🎉",
+      order,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
 
-} catch (error) {
-await session.abortTransaction();
-session.endSession();
-
-
-console.error("CREATE ORDER ERROR:", error);
-
-res.status(500).json({
-  message: error.message || "Failed to place order",
-});
-
-}
+    console.error("CREATE ORDER ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to place order",
+    });
+  }
 };
 
 /* ================= GET MY ORDERS ================= */
@@ -295,4 +287,17 @@ export const updateOrderStatus = async (req, res) => {
   }
 };
 
-/* ================= ADMIN: GET ALL ORDERS ================= */ export const getAllOrders = async (req, res) => { try { const orders = await Order.find() .populate("userId", "name email") .populate("delivery_address") .sort({ createdAt: -1 }); res.status(200).json({ success: true, orders, }); } catch (error) { console.error("GET ALL ORDERS ERROR:", error); res.status(500).json({ message: "Failed to fetch orders", }); } };
+/* ================= ADMIN: GET ALL ORDERS ================= */
+export const getAllOrders = async (req, res) => {
+  try {
+    const orders = await Order.find()
+      .populate("userId", "name email")
+      .populate("delivery_address")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ success: true, orders });
+  } catch (error) {
+    console.error("GET ALL ORDERS ERROR:", error);
+    res.status(500).json({ message: "Failed to fetch orders" });
+  }
+};

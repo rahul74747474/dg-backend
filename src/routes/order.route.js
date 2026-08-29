@@ -3,6 +3,7 @@ import protect from "../middlewares/protect.js";
 import adminOnly from "../middlewares/adminOnly.js";
 
 import {
+  previewOrderPricing,
   createOrder,
   getMyOrders,
   getOrderById,
@@ -16,6 +17,12 @@ const orderRouter = Router();
 /* =====================================================
    USER ROUTES
    ===================================================== */
+
+/**
+ * Preview checkout pricing and real-time shipping
+ * POST /api/orders/preview
+ */
+orderRouter.post("/preview", protect, previewOrderPricing);
 
 /**
  * Create new order (from cart)
