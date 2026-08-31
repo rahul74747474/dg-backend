@@ -288,18 +288,10 @@ console.log(
   JSON.stringify(serviceRes.data, null, 2)
 );
 
-const couriers = serviceRes.data?.data?.available_courier_companies || [];
+const couriers =
+  serviceRes.data?.data?.available_courier_companies || [];
 
-let courierId =
-  serviceRes.data?.data?.recommended_courier_company_id;
-
-if (!courierId && couriers.length) {
-  courierId = [...couriers].sort(
-    (a, b) => Number(a.rate) - Number(b.rate)
-  )[0].courier_company_id;
-}
-
-if (!courierId) {
+if (!couriers.length) {
   throw new Error(
     `No courier available for this route. Response: ${JSON.stringify(
       serviceRes.data
@@ -307,7 +299,29 @@ if (!courierId) {
   );
 }
 
-console.log("🚚 SELECTED COURIER ID:", courierId);
+// Select the courier with the lowest shipping rate
+const cheapestCourier = [...couriers].sort(
+  (a, b) => Number(a.rate) - Number(b.rate)
+)[0];
+
+const courierId = cheapestCourier.courier_company_id;
+
+console.log("💰 AVAILABLE COURIERS:");
+
+console.table(
+  couriers.map((courier) => ({
+    id: courier.courier_company_id,
+    name: courier.courier_name,
+    rate: courier.rate,
+  }))
+);
+
+console.log("💰 CHEAPEST COURIER SELECTED:");
+console.log({
+  id: courierId,
+  name: cheapestCourier.courier_name,
+  rate: cheapestCourier.rate,
+});
 
   // Step 3: Assign AWB
 await new Promise((resolve) => setTimeout(resolve, 1000));
