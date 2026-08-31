@@ -247,57 +247,107 @@ export const processShiprocketFlow = async (order) => {
 
     // Step 1: Create adhoc order
     const orderRes = await client.post("/orders/create/adhoc", orderPayload);
-    const shipmentId = orderRes.data?.shipment_id;
 
-    if (!shipmentId) {
-      throw new Error("Shipment ID not received from Shiprocket");
-    }
+console.log(
+  "🚚 SHIPROCKET CREATE ORDER STATUS:",
+  orderRes.status
+);
 
+console.log(
+  "🚚 SHIPROCKET CREATE ORDER RESPONSE:",
+  JSON.stringify(orderRes.data, null, 2)
+);
+
+const shipmentId = orderRes.data?.shipment_id;
+
+if (!shipmentId) {
+  throw new Error(
+    `Shipment ID not received from Shiprocket. Response: ${JSON.stringify(orderRes.data)}`
+  );
+}
     // Step 2: Get Best Courier
-    const weight = Math.max(order.shipmentDetails?.weight || 0.5, 0.5);
-    const serviceRes = await client.get("/courier/serviceability/", {
-      params: {
-        pickup_postcode: pickupPincode,
-        delivery_postcode: addr.pincode,
-        cod: order.payment?.method === "COD" ? 1 : 0,
-        weight,
-      },
-    });
+const weight = Math.max(order.shipmentDetails?.weight || 0.5, 0.5);
 
-    const couriers = serviceRes.data?.data?.available_courier_companies;
-    let courierId = serviceRes.data?.data?.recommended_courier_company_id;
+console.log("🚚 STEP 2: Checking courier serviceability...");
+console.log("📍 Pickup:", pickupPincode);
+console.log("📍 Delivery:", addr.pincode);
+console.log("⚖️ Weight:", weight);
+console.log("💰 COD:", order.payment?.method === "COD" ? 1 : 0);
 
-    if (!courierId && couriers?.length) {
-      courierId = couriers.sort((a, b) => Number(a.rate) - Number(b.rate))[0].courier_company_id;
-    }
+const serviceRes = await client.get("/courier/serviceability/", {
+  params: {
+    pickup_postcode: pickupPincode,
+    delivery_postcode: addr.pincode,
+    cod: order.payment?.method === "COD" ? 1 : 0,
+    weight,
+  },
+});
 
-    if (!courierId) {
-      throw new Error("No courier available for this route");
-    }
+console.log(
+  "🚚 STEP 2 RESPONSE:",
+  JSON.stringify(serviceRes.data, null, 2)
+);
 
-    // Step 3: Assign AWB
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+const couriers = serviceRes.data?.data?.available_courier_companies || [];
 
-    let awbCode = null;
-    let courierName = null;
+let courierId =
+  serviceRes.data?.data?.recommended_courier_company_id;
 
-    try {
-      const awbRes = await client.post("/courier/assign/awb", {
-        shipment_id: shipmentId,
-        courier_id: courierId,
-      });
+if (!courierId && couriers.length) {
+  courierId = [...couriers].sort(
+    (a, b) => Number(a.rate) - Number(b.rate)
+  )[0].courier_company_id;
+}
 
-      if (awbRes.data?.awb_assign_status === 1) {
-        awbCode = awbRes.data.response.data.awb_code;
-        courierName = awbRes.data.response.data.courier_name;
-      }
-    } catch (awbError) {
-      console.warn(
-        "⚠️ AWB assignment delayed or failed (wallet balance likely):",
-        awbError.response?.data || awbError.message
-      );
-    }
+if (!courierId) {
+  throw new Error(
+    `No courier available for this route. Response: ${JSON.stringify(
+      serviceRes.data
+    )}`
+  );
+}
 
+console.log("🚚 SELECTED COURIER ID:", courierId);
+
+  // Step 3: Assign AWB
+await new Promise((resolve) => setTimeout(resolve, 1000));
+
+console.log("🚚 STEP 3: Assigning AWB...");
+console.log("📦 Shipment ID:", shipmentId);
+console.log("🚚 Courier ID:", courierId);
+
+let awbCode = null;
+let courierName = null;
+
+try {
+  const awbRes = await client.post("/courier/assign/awb", {
+    shipment_id: shipmentId,
+    courier_id: courierId,
+  });
+
+  console.log(
+    "🚚 AWB RESPONSE:",
+    JSON.stringify(awbRes.data, null, 2)
+  );
+
+  if (awbRes.data?.awb_assign_status === 1) {
+    awbCode = awbRes.data.response.data.awb_code;
+    courierName = awbRes.data.response.data.courier_name;
+
+    console.log("✅ AWB ASSIGNED:", awbCode);
+    console.log("🚚 COURIER:", courierName);
+  } else {
+    console.warn(
+      "⚠️ AWB was not assigned:",
+      JSON.stringify(awbRes.data, null, 2)
+    );
+  }
+} catch (awbError) {
+  console.error(
+    "❌ AWB ASSIGNMENT ERROR:",
+    awbError.response?.data || awbError.message
+  );
+}
     // Step 4: Persist shipping details on Order document
     await mongoose.connection.collection("orders").updateOne(
       { _id: new mongoose.Types.ObjectId(order._id) },
