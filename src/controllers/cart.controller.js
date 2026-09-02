@@ -74,22 +74,40 @@ export const getCartItemController = async (req, res) => {
 export const updateCartItemQtyController = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { productId, action } = req.body;
+    const { productId, action, quantity } = req.body;
 
-    if (!productId || !action) {
+    if (!productId) {
       return res.status(400).json({
-        message: "productId and action are required",
+        message: "productId is required",
       });
     }
 
     let updateQuery = {};
 
-    if (action === "increase") {
+    if (quantity !== undefined && quantity !== null) {
+      const parsedQty = Number(quantity);
+      if (isNaN(parsedQty)) {
+        return res.status(400).json({ message: "Invalid quantity value" });
+      }
+
+      if (parsedQty <= 0) {
+        const deleted = await CartProductModel.findOneAndDelete({ userId, productId });
+        return res.status(200).json({
+          success: true,
+          message: "Item removed",
+          deleted: Boolean(deleted),
+        });
+      }
+
+      updateQuery = { $set: { quantity: parsedQty } };
+    } else if (action === "increase") {
       updateQuery = { $inc: { quantity: 1 } };
     } else if (action === "decrease") {
       updateQuery = { $inc: { quantity: -1 } };
     } else {
-      return res.status(400).json({ message: "Invalid action" });
+      return res.status(400).json({
+        message: "Either valid action ('increase' | 'decrease') or numeric quantity is required",
+      });
     }
 
     const cartItem = await CartProductModel.findOneAndUpdate(

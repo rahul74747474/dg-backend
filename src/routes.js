@@ -14,6 +14,7 @@ import contactRoutes from "./routes/contact.route.js";
 import b2bRouter from "./routes/b2b.route.js";
 import pricingRoutes from "./routes/pricing.route.js";
 import { trackOrderController } from "./controllers/track.controller.js";
+import protect from "./middlewares/protect.js";
 
 
 const router = express.Router();
@@ -58,7 +59,8 @@ router.use("/pricing", pricingRoutes);
 
 router.use("/shipping", shippingRoutes);
 router.use("/contact", contactRoutes);
-router.get("/track/:shipmentId", trackOrderController);
+router.get("/track/:awb", trackOrderController);
+router.get("/track", trackOrderController);
 router.use("/b2b", b2bRouter);
 export default router;
 

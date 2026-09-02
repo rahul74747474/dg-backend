@@ -20,21 +20,26 @@ export const handlePostPaymentShipment = async (req, res) => {
 
     // 2. Execute background flow
     const shippingDetails = await processShiprocketFlow(order);
-  
 
-    // 3. Update Database
-    order.shipping.shipmentId = shippingDetails.shipmentId;
-    order.shipping.awbCode = shippingDetails.awbCode;
-    order.shipping.courierName = shippingDetails.courier;
-    order.status = "Processed"; // Update internal order status
-    
-    await order.save();
+    // 3. Return the shipping state so the client receives accurate info
+    if (shippingDetails.awbCode) {
+      return res.json({
+        success: true,
+        message: "Shipment and AWB processed successfully",
+        shipmentId: shippingDetails.shipmentId,
+        awb: shippingDetails.awbCode,
+        courier: shippingDetails.courier,
+        isFullyProcessed: true,
+      });
+    }
 
-    // 4. Return the AWB so the frontend can display it
-    res.json({
-      message: "Shipment processed successfully",
-      awb: shippingDetails.awbCode,
-      courier: shippingDetails.courier
+    return res.json({
+      success: true,
+      message: "Shipment created in Shiprocket. AWB assignment is pending.",
+      shipmentId: shippingDetails.shipmentId,
+      awb: null,
+      courier: shippingDetails.courier,
+      isFullyProcessed: false,
     });
 
   } catch (error) {

@@ -243,142 +243,123 @@ export const processShiprocketFlow = async (order) => {
       weight: Math.max(order.shipmentDetails?.weight || 0.5, 0.5),
     };
 
-    console.log("📦 Shiprocket Create Order Payload:", orderPayload);
+    console.log("📦 Creating Shiprocket adhoc order for Order ID:", order._id);
 
     // Step 1: Create adhoc order
     const orderRes = await client.post("/orders/create/adhoc", orderPayload);
 
-console.log(
-  "🚚 SHIPROCKET CREATE ORDER STATUS:",
-  orderRes.status
-);
+    console.log("🚚 SHIPROCKET CREATE ORDER STATUS:", orderRes.status);
 
-console.log(
-  "🚚 SHIPROCKET CREATE ORDER RESPONSE:",
-  JSON.stringify(orderRes.data, null, 2)
-);
-
-const shipmentId = orderRes.data?.shipment_id;
+    const shipmentId = orderRes.data?.shipment_id;
 
 if (!shipmentId) {
   throw new Error(
     `Shipment ID not received from Shiprocket. Response: ${JSON.stringify(orderRes.data)}`
   );
 }
-    // Step 2: Get Best Courier
-// const weight = Math.max(order.shipmentDetails?.weight || 0.5, 0.5);
+    // Step 2: Get Best Courier (Always select courier with lowest rate)
+    const weight = Math.max(order.shipmentDetails?.weight || 0.5, 0.5);
 
-// console.log("🚚 STEP 2: Checking courier serviceability...");
-// console.log("📍 Pickup:", pickupPincode);
-// console.log("📍 Delivery:", addr.pincode);
-// console.log("⚖️ Weight:", weight);
-// console.log("💰 COD:", order.payment?.method === "COD" ? 1 : 0);
+    console.log("🚚 STEP 2: Checking courier serviceability for cheapest rate...");
+    console.log("📍 Pickup:", pickupPincode, "| Delivery:", addr.pincode, "| Weight:", weight);
 
-// const serviceRes = await client.get("/courier/serviceability/", {
-//   params: {
-//     pickup_postcode: pickupPincode,
-//     delivery_postcode: addr.pincode,
-//     cod: order.payment?.method === "COD" ? 1 : 0,
-//     weight,
-//   },
-// });
+    let courierId = null;
+    let courierName = null;
+    let cheapestRate = null;
 
-// console.log(
-//   "🚚 STEP 2 RESPONSE:",
-//   JSON.stringify(serviceRes.data, null, 2)
-// );
+    try {
+      const serviceRes = await client.get("/courier/serviceability/", {
+        params: {
+          pickup_postcode: pickupPincode,
+          delivery_postcode: addr.pincode,
+          cod: order.payment?.method === "COD" ? 1 : 0,
+          weight,
+        },
+      });
 
-// const couriers =
-//   serviceRes.data?.data?.available_courier_companies || [];
+      const couriers = serviceRes.data?.data?.available_courier_companies || [];
 
-// if (!couriers.length) {
-//   throw new Error(
-//     `No courier available for this route. Response: ${JSON.stringify(
-//       serviceRes.data
-//     )}`
-//   );
-// }
+      if (couriers.length > 0) {
+        // Sort couriers by actual rate ascending (cheapest first)
+        const cheapestCourier = [...couriers].sort(
+          (a, b) => Number(a.rate) - Number(b.rate)
+        )[0];
 
-// // Select the courier with the lowest shipping rate
-// const cheapestCourier = [...couriers].sort(
-//   (a, b) => Number(a.rate) - Number(b.rate)
-// )[0];
+        if (cheapestCourier && !isNaN(Number(cheapestCourier.rate))) {
+          courierId = cheapestCourier.courier_company_id;
+          courierName = cheapestCourier.courier_name || null;
+          cheapestRate = Number(cheapestCourier.rate);
 
-// const courierId = cheapestCourier.courier_company_id;
+          console.log(`💰 CHEAPEST COURIER SELECTED: ${courierName} (ID: ${courierId}, Rate: ₹${cheapestRate})`);
+        }
+      } else {
+        console.warn("⚠️ No serviceable couriers returned from Shiprocket for route");
+      }
+    } catch (serviceErr) {
+      console.error("🚨 Courier Serviceability Error:", serviceErr.response?.data || serviceErr.message);
+    }
 
-// console.log("💰 AVAILABLE COURIERS:");
+    // Step 3: Assign AWB if courier is available
+    let awbCode = null;
 
-// console.table(
-//   couriers.map((courier) => ({
-//     id: courier.courier_company_id,
-//     name: courier.courier_name,
-//     rate: courier.rate,
-//   }))
-// );
+    if (courierId) {
+      try {
+        console.log("🚚 STEP 3: Assigning AWB with Courier ID:", courierId);
+        const awbRes = await client.post("/courier/assign/awb", {
+          shipment_id: shipmentId,
+          courier_id: courierId,
+        });
 
-// console.log("💰 CHEAPEST COURIER SELECTED:");
-// console.log({
-//   id: courierId,
-//   name: cheapestCourier.courier_name,
-//   rate: cheapestCourier.rate,
-// });
+        console.log("🚚 AWB ASSIGN RESPONSE:", JSON.stringify(awbRes.data));
 
-  // Step 3: Assign AWB
-// await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (awbRes.data?.awb_assign_status === 1) {
+          const rawAwb = awbRes.data.response?.data?.awb_code;
+          if (rawAwb && String(rawAwb).trim().length > 0) {
+            awbCode = String(rawAwb).trim();
+          }
 
-// console.log("🚚 STEP 3: Assigning AWB...");
-// console.log("📦 Shipment ID:", shipmentId);
-// console.log("🚚 Courier ID:", courierId);
+          const resCourier = awbRes.data.response?.data?.courier_name;
+          if (resCourier) {
+            courierName = resCourier;
+          }
 
-// let awbCode = null;
-// let courierName = null;
+          console.log("✅ AWB ASSIGNED SUCCESSFULLY:", awbCode, "Courier:", courierName);
+        } else {
+          console.warn("⚠️ AWB assignment not immediately confirmed by Shiprocket:", awbRes.data?.message);
+        }
+      } catch (awbError) {
+        console.error("❌ AWB ASSIGNMENT ERROR:", awbError.response?.data || awbError.message);
+      }
+    }
 
-// try {
-//   const awbRes = await client.post("/courier/assign/awb", {
-//     shipment_id: shipmentId,
-//     courier_id: courierId,
-//   });
-
-//   console.log(
-//     "🚚 AWB RESPONSE:",
-//     JSON.stringify(awbRes.data, null, 2)
-//   );
-
-//   if (awbRes.data?.awb_assign_status === 1) {
-//     awbCode = awbRes.data.response.data.awb_code;
-//     courierName = awbRes.data.response.data.courier_name;
-
-//     console.log("✅ AWB ASSIGNED:", awbCode);
-//     console.log("🚚 COURIER:", courierName);
-//   } else {
-//     console.warn(
-//       "⚠️ AWB was not assigned:",
-//       JSON.stringify(awbRes.data, null, 2)
-//     );
-//   }
-// } catch (awbError) {
-//   console.error(
-//     "❌ AWB ASSIGNMENT ERROR:",
-//     awbError.response?.data || awbError.message
-//   );
-// }
     // Step 4: Persist shipping details on Order document
+    // If AWB was not assigned, do NOT save empty string as valid AWB
+    const cleanAwbCode = (awbCode && typeof awbCode === "string" && awbCode.trim().length > 0)
+      ? awbCode.trim()
+      : null;
+
+    const updateFields = {
+      "shipping.shipmentId": String(shipmentId),
+      "shipping.awbCode": cleanAwbCode,
+      "shipping.courierName": courierName || null,
+    };
+
+    if (cheapestRate !== null && !isNaN(cheapestRate)) {
+      updateFields["pricing.actualShippingCost"] = Math.round(cheapestRate);
+    }
+
     await mongoose.connection.collection("orders").updateOne(
       { _id: new mongoose.Types.ObjectId(order._id) },
       {
-        $set: {
-          "shipping.shipmentId": shipmentId,
-          "shipping.awbCode": awbCode,
-          "shipping.courierName": courierName,
-          orderStatus: awbCode ? "CONFIRMED" : "PLACED",
-        },
+        $set: updateFields,
       }
     );
 
     return {
       shipmentId,
-      awbCode,
+      awbCode: cleanAwbCode,
       courier: courierName,
+      isFullyProcessed: Boolean(cleanAwbCode),
     };
   } catch (error) {
     console.error("🚨 Shiprocket Execution Error:", error.response?.data || error.message);

@@ -7,7 +7,8 @@ import {
   updateAddress,
   deleteAddress,
   setDefaultAddress,
-  getAddressByIdController
+  getAddressByIdController,
+  lookupPincode,
 } from "../controllers/address.controller.js";
 
 const addressRouter = Router();
@@ -46,6 +47,13 @@ addressRouter.put("/default/:id", protect, setDefaultAddress);
  * @access  Private
  */
 addressRouter.delete("/:id", protect, deleteAddress);
+
+/**
+ * @route   GET /api/address/pincode/:pincode
+ * @desc    Lookup Indian state and city by 6-digit pincode
+ * @access  Public
+ */
+addressRouter.get("/pincode/:pincode", lookupPincode);
 
 addressRouter.get("/:id", protect, getAddressByIdController);
 
